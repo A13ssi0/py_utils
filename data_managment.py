@@ -11,6 +11,8 @@ from os.path import dirname
 import tkinter as tk
 from tkinter import filedialog as fd
 
+from mne.io import read_raw_gdf
+from mne import events_from_annotations
 
 
 def saveto_npy(arr, pth):
@@ -37,8 +39,10 @@ def get_all_online_offline_files(path):
     return signal, events_dataFrame
 
 
-def get_filesNames_from_folder(mypath):
+def get_filesNames_from_folder(mypath, pattern=None):
     filenames = [f for f in os.listdir(mypath) if os.path.isfile(os.path.join(mypath, f))]
+    if pattern is not None:
+        filenames = [f for f in filenames if pattern in f]
     return sorted(filenames)
 
 
@@ -130,12 +134,14 @@ def load_gdf_files(filenames):
     d['typ']=[]
     d['run']=[]
     d['ses']=[]
+    d['dur']=[]
     n_ses = 0
     last_day = ''
     for n,file in enumerate(filenames):
         print(' - Loading file: ' + file)
         eeg,h = read_gdf(file)
         d['typ'].append(h['EVENT']['TYP'])
+        d['dur'].append(h['EVENT']['DUR'])
         d['pos'].append(h['EVENT']['POS']+eeg_dim_tot-1)
         d['run'].append([n]*len(h['EVENT']['TYP']))
         if file.split('/')[-2] == last_day or last_day=='':
@@ -152,6 +158,7 @@ def load_gdf_files(filenames):
     d['pos'] = [ int(x) for x in np.concatenate(d['pos']) ]
     d['run'] = [ int(x) for x in np.concatenate(d['run']) ]
     d['ses'] = [ int(x) for x in np.concatenate(d['ses']) ]
+    d['dur'] = [ int(x) for x in np.concatenate(d['dur']) ]
     #d['ses_vector'] = [ int(x) for x in np.concatenate(d['ses_vector']) ]
     
     events_dataFrame = pd.DataFrame(data=d)
@@ -164,20 +171,26 @@ def load(filename):
 def save(filename, variable):
     joblib.dump(variable, filename)
 
-def read_gdf(spath):
-    raw = mne.io.read_raw_gdf(spath,verbose='error')
-    # raw = mne.io.read_raw_gdf(spath)
-    events,names = mne.events_from_annotations(raw,verbose='error')
-    # events,names = mne.events_from_annotations(raw)
+
+def read_gdf(spath,verbosity='error',raw_events=False):
+    raw = read_raw_gdf(spath,verbose=verbosity)
+
+    eeg = raw.get_data().T
+    
+    events,names = events_from_annotations(raw,verbose=verbosity)
     names = {v:int(k) for k,v in names.items()}
     events_pos = events[:,0]
-    events_typ = events[:,2]
-    events_typ = [names[e] for  e in events_typ]
-    eeg = raw.get_data().T
+    events_typ = [names[e] for  e in events[:,2]]
+
+    events = {'POS':np.array(events_pos),'TYP':np.array(events_typ)}
+    if not raw_events:
+        events = get_events(events)
+
     header = {'SampleRate':raw.info['sfreq'],
-                'EVENT':{'POS':np.array(events_pos),'TYP':np.array(events_typ)}
-                }
-    #print((np.array(events_typ)==781).sum(),'events found')
+              'EVENT': events,
+              'ChannelNames':np.array(raw.info['ch_names']),
+            }
+    
     return eeg,header
 
 
@@ -194,3 +207,25 @@ def fix_mat(data):
         return new_data
     else:
         return data
+    
+
+
+def get_events(events, OFFSET=0x8000):
+    events = pd.DataFrame(events)
+    true_events = events.loc[events['TYP']<OFFSET].copy() # Keep event openings only
+
+    # Compute event ends based on the position of event closure
+    true_events['END'] = np.nan
+
+    for e in true_events['TYP'].unique():
+        ev_idx = events['TYP']==(e + OFFSET)
+        true_events.loc[true_events['TYP']==e,'END'] = np.where(events[ev_idx]['POS'],events[ev_idx]['POS'],0)
+
+    true_events['END'] = true_events['END'].astype(int)
+    true_events['DUR'] = true_events['END']-true_events['POS'] #Compute event duration
+
+    # Keep only relevant columns
+    true_events = true_events[['TYP','POS','DUR',]]
+
+    return true_events.reset_index()
+

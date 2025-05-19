@@ -82,8 +82,9 @@ def load_mat_files(filenames):
     d['run']=[]
     d['day']=[]
     d['prt']=[]
+    dates = []
 
-    n_ses = 1
+    n_ses = 0
     last_day = ''
     for n,file in enumerate(filenames):
         print(' - Loading file: ' + file)
@@ -93,11 +94,12 @@ def load_mat_files(filenames):
         d['typ'].append(h['EVENT']['TYP'])
         d['pos'].append(h['EVENT']['POS']+eeg_dim_tot-1)
         d['run'].append([n]*len(h['EVENT']['DUR']))
-        if file.split('/')[-2] == last_day or last_day=='':
-            d['day'].append([n_ses]*len(h['EVENT']['DUR']))
-        else:
+        if file.split('/')[-2] != last_day:     
             n_ses += 1
-            d['day'].append([n_ses]*len(h['EVENT']['DUR']))
+            t_day = file.split('/')[-2]
+            dates.append(t_day[6:8]+'/'+t_day[4:6]+'/'+t_day[:4])
+        d['day'].append([n_ses]*len(h['EVENT']['DUR']))
+            
         if 'calibration' in file:
             d['prt'].append([0]*len(h['EVENT']['DUR']))
         elif 'evaluation' in file:
@@ -123,7 +125,7 @@ def load_mat_files(filenames):
     fs = int(h['SampleRate'])
     
     events_dataFrame = pd.DataFrame(data=d)
-    return signal, events_dataFrame, fs
+    return signal, events_dataFrame, fs, dates
 
 
 def load_gdf_files(filenames):

@@ -1,8 +1,7 @@
 import numpy as np
 import pandas as pd
 from py_utils.eeg_managment import proc_pos2win
-
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, lfilter, lfilter_zi
 from tqdm import tqdm
 
 
@@ -69,10 +68,35 @@ def logbandpower(data, fs, slidingWindowLength=None):
 
 
 # # ---------------------- ONLINE ----------------------
+class RealTimeButterFilter:
+    def __init__(self, order, cutoff, fs, type):
+        self.order = order
+        self.cutoff = cutoff
+        self.fs = fs
+        self.b, self.a = butter(order, 2 * cutoff / fs, btype=type)
+        self.zi = None  # will be initialized on first call
 
+    def filter(self, data_chunk):
+        if self.zi is None:
+            # Initialize zi for each channel if data is 2D
+            if data_chunk.ndim == 1:
+                self.zi = lfilter_zi(self.b, self.a) * data_chunk[0]
+            else:
+                self.zi = np.array([
+                    lfilter_zi(self.b, self.a) * data_chunk[0, ch]
+                    for ch in range(data_chunk.shape[1])
+                ]).T
+
+        y, self.zi = lfilter(self.b, self.a, data_chunk, axis=0, zi=self.zi)
+        return y
+    
 def get_covariance_matrix_traceNorm_online(data):
     data -= np.mean(data, axis=(0,2), keepdims=True)
     cov = data.transpose((0,2,1)) @ data
     cov =  cov  / np.trace(cov, axis1=1, axis2=2).reshape(-1,1,1)
     cov = np.expand_dims(cov, axis=1)
     return cov
+
+def get_bandranges_online(signal, filter: RealTimeButterFilter):
+    return filter.filter(signal)
+

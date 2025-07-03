@@ -61,15 +61,13 @@ def get_files(path):
             break
         filenames += chosen_files
         
-    if filenames[0,-4:]=='.mat':
-        signal, events_dataFrame, fs = load_mat_files(filenames)
-    elif filenames[0,-4:]=='.gdf':
-        signal, events_dataFrame = load_gdf_files(filenames)
-        fs = None
+    if filenames[0][-4:]=='.mat':
+        signal, events_dataFrame, h, _ = load_mat_files(filenames)
+    elif filenames[0][-4:]=='.gdf':
+        signal, events_dataFrame, h = load_gdf_files(filenames)
     
-    directory_path = dirname(filenames[0])
     root.destroy()
-    return [signal, events_dataFrame, fs, directory_path]
+    return [signal, events_dataFrame, h, list(filenames)]
 
 
 def load_mat_files(filenames):
@@ -109,7 +107,7 @@ def load_mat_files(filenames):
         else:
             d['prt'].append([-1]*len(h['EVENT']['DUR']))
         last_day = file.split('/')[-2]
-        signal.append(data['s'][:,:-1])
+        signal.append(data['s'])
         eeg_dim_tot += data['s'].shape[0]
 
 
@@ -121,11 +119,9 @@ def load_mat_files(filenames):
     d['day'] = [ int(x) for x in np.concatenate(d['day']) ]
     d['prt'] = [ int(x) for x in np.concatenate(d['prt']) ]
     #d['ses_vector'] = [ int(x) for x in np.concatenate(d['ses_vector']) ]
-
-    fs = int(h['SampleRate'])
     
     events_dataFrame = pd.DataFrame(data=d)
-    return signal, events_dataFrame, fs, dates
+    return signal, events_dataFrame, h, dates
 
 
 def load_gdf_files(filenames):
@@ -164,13 +160,14 @@ def load_gdf_files(filenames):
     #d['ses_vector'] = [ int(x) for x in np.concatenate(d['ses_vector']) ]
     
     events_dataFrame = pd.DataFrame(data=d)
-    return signal, events_dataFrame
+    return signal, events_dataFrame, h
 
 
 def load(filename):
     return joblib.load(filename)
 
 def save(filename, variable):
+    if not filename.endswith('.joblib'):    filename += '.joblib'
     joblib.dump(variable, filename)
 
 

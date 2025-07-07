@@ -95,12 +95,10 @@ class RealTimeButterFilter:
         return y
     
 def get_covariance_matrix_traceNorm_online(data):
-    data -= np.mean(data, axis=(0,2), keepdims=True)
-    cov = data.transpose((0,2,1)) @ data
+    data -= np.mean(data, axis=(0, 1), keepdims=True)
+    cov = data.transpose((0, 2, 1)) @ data
+    # cov = covariances(data.transpose((0, 2, 1)), estimator='lwf')
     cov =  cov  / np.trace(cov, axis1=1, axis2=2).reshape(-1,1,1)
-    cov = np.expand_dims(cov, axis=1)
-    return cov
+    return np.expand_dims(cov, axis=1)
 
-def get_bandranges_online(signal, filter: RealTimeButterFilter):
-    return filter.filter(signal)
 

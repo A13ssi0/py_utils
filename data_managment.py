@@ -164,6 +164,7 @@ def load_gdf_files(filenames):
 
 
 def load(filename):
+    if not filename.endswith('.joblib'):    filename += '.joblib'
     return joblib.load(filename)
 
 def save(filename, variable):

@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 
 
-def get_channels_bool(wantedChannels, actualChannels):
+def get_channelsMask(wantedChannels, actualChannels):
     return [item in wantedChannels for item in actualChannels]
 
 
@@ -15,9 +15,8 @@ def select_channels(signal, wantedChannels, actualChannels=[]):
     elif signal.shape[1] == 16 and len(actualChannels)==0:
         actualChannels =  np.array(['Fz', 'FC3', 'FC1', 'FCz', 'FC2', 'FC4', 'C3','C1', 'Cz', 'C2', 'C4', 'CP3', 'CP1', 'CPz','CP2', 'CP4'])
     
-    boolean_list = get_channels_bool(wantedChannels, actualChannels)
+    boolean_list = get_channelsMask(wantedChannels, actualChannels)
     return [signal[:,boolean_list], actualChannels[boolean_list]]
-
 
 
 def proc_pos2win(POS, wshift, direction, wlength=-1):

@@ -95,8 +95,10 @@ class RealTimeButterFilter:
         return y
     
 def get_covariance_matrix_traceNorm_online(data):
+    if data.ndim == 2:  data = np.expand_dims(data, axis=0)
     data -= np.mean(data, axis=(0, 1), keepdims=True)
     cov = data.transpose((0, 2, 1)) @ data
+    # print('cov,',cov.shape)
     # cov = covariances(data.transpose((0, 2, 1)), estimator='lwf')
     cov =  cov  / np.trace(cov, axis1=1, axis2=2).reshape(-1,1,1)
     return np.expand_dims(cov, axis=1)

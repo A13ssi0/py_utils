@@ -51,23 +51,26 @@ def get_immediate_subdirectories(path_dir):
     return sorted(subdirectories)
 
 
-def get_files(path):
-    root = tk.Tk()
+def get_files(path, ask_user=True):
 
-    filenames = ()
-    while True:
-        chosen_files = fd.askopenfilenames(initialdir=path)
-        if len(chosen_files)==0:
-            break
-        filenames += chosen_files
-        
+    if ask_user:
+        root = tk.Tk()
+        filenames = ()
+        while True:
+            chosen_files = fd.askopenfilenames(initialdir=path)
+            if len(chosen_files)==0:
+                break
+            filenames += chosen_files
+        root.destroy() 
+    else:
+        filenames = path
+
     if filenames[0][-4:]=='.mat':
         signal, events_dataFrame, h, _ = load_mat_files(filenames)
     elif filenames[0][-4:]=='.gdf':
         signal, events_dataFrame, h = load_gdf_files(filenames)
-    
-    root.destroy()
-    return [signal, events_dataFrame, h, list(filenames)]
+
+    return signal, events_dataFrame, h, list(filenames)
 
 
 def load_mat_files(filenames):

@@ -4,7 +4,7 @@ import pandas as pd
 import joblib
 import os
 
-from scipy.io import loadmat
+from scipy.io import loadmat, savemat
 import mne
 
 from os.path import dirname
@@ -166,13 +166,19 @@ def load_gdf_files(filenames):
     return signal, events_dataFrame, h
 
 
-def load(filename):
-    if not filename.endswith('.joblib'):    filename += '.joblib'
-    return joblib.load(filename)
+def load(filename, Type='.joblib'): 
+    if not filename.endswith('.joblib') and not filename.endswith('.mat'):
+        filename += Type
+    if filename.endswith('.mat'):       return loadmat(filename)
+    elif filename.endswith('.joblib'):  return joblib.load(filename)
+    else: raise ValueError('File type not recognized. Use .mat or .joblib')
 
-def save(filename, variable):
-    if not filename.endswith('.joblib'):    filename += '.joblib'
-    joblib.dump(variable, filename)
+def save(filename, variable, Type='.joblib'):
+    if not filename.endswith('.joblib') and not filename.endswith('.mat'):
+        filename += Type
+    if filename.endswith('.mat'):       savemat(filename, variable)
+    elif filename.endswith('.joblib'):  joblib.dump(variable, filename)
+    else: raise ValueError('File type not recognized. Use .mat or .joblib')
 
 
 def read_gdf(spath,verbosity='error',raw_events=False):

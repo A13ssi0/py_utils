@@ -68,6 +68,9 @@ def logbandpower(data, fs, slidingWindowLength=None):
     if slidingWindowLength is not None:
         b = np.ones(slidingWindowLength * fs) / (slidingWindowLength * fs)
         data_sqr = lfilter(b, 1, data_sqr, axis=0)
+    if (data_sqr == 0).any():
+        print("!!! WARNING: zero values found when computing logbandpower, adding 1e-12 to avoid log(0) !!!")
+        data_sqr += 1e-12
     return np.log(data_sqr)
 
 
@@ -88,11 +91,42 @@ class RealTimeButterFilter:
             else:
                 self.zi = np.array([
                     lfilter_zi(self.b, self.a) * data_chunk[0, ch]
-                    for ch in range(data_chunk.shape[1])
-                ]).T
+                    for ch in range(data_chunk.shape[1])]).T
 
         y, self.zi = lfilter(self.b, self.a, data_chunk, axis=0, zi=self.zi)
         return y
+    
+
+class RealTimeLogBandPower:
+    def __init__(self, fs, sliding_window_length=None):
+        self.fs = fs
+        self.zi = None 
+        if sliding_window_length is not None:
+            n_points = sliding_window_length * fs
+            self.b = np.ones(n_points) / n_points
+            self.a = [1.0]
+        else:
+            self.b, self.a = None, None
+
+    def process(self, data_chunk):  
+        data_sqr = data_chunk ** 2
+
+        if self.zi is None and self.b is not None:
+            if data_chunk.ndim == 1:
+                self.zi = lfilter_zi(self.b, self.a) * data_chunk[0]
+            else:
+                self.zi = np.array([
+                    lfilter_zi(self.b, self.a) * data_chunk[0, ch]
+                    for ch in range(data_chunk.shape[1])]).T
+                
+        if self.b is not None:
+            data_sqr, self.zi = lfilter(self.b, self.a, data_sqr, axis=0, zi=self.zi)
+        if (data_sqr == 0).any():
+            print("!!! WARNING: zero values found when computing logbandpower, adding 1e-12 to avoid log(0) !!!")
+            data_sqr += 1e-12
+        return np.log(data_sqr)
+
+
     
 def get_covariance_matrix_traceNorm_online(data):
     if data.ndim == 2:  data = np.expand_dims(data, axis=0)

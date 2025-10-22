@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 from py_utils.eeg_managment import proc_pos2win
-
+from matplotlib import mlab
+from scipy import signal
+import warnings
 from scipy.signal import butter, lfilter
 from tqdm import tqdm
 
@@ -66,6 +68,308 @@ def logbandpower(data, fs, slidingWindowLength=None):
         b = np.ones(slidingWindowLength * fs) / (slidingWindowLength * fs)
         data_sqr = lfilter(b, 1, data_sqr, axis=0)
     return np.log(data_sqr)
+
+
+
+def proc_spectrogram(data, wlength, wshift, pshift, samplerate, mlength=None):
+    """
+    [features, f] = proc_spectrogram(data, wlength, wshift, pshift, samplerate [, mlength])
+    
+    The function computes the spectrogram on the real data.
+    
+    Input arguments:
+        - data              Data matrix [samples x channels]
+        - wlength           Window's lenght to be used to segment data and
+                           compute the spectrogram                             [in seconds]
+        - wshift            Shift of the external window (e.g., frame size)     [in seconds]
+        - pshift            Shift of the internal psd windows                   [in seconds]
+        - samplerate        Samplerate of the data
+        - [mlength]         Optional length of the external windows to compute
+                           the moving average.                                 [in seconds] 
+                           By default the length of the moving average window
+                           is set to 1 second. To not compute the moving
+                           average, empty argument can be provided.
+    
+    Output arguments:
+        - features          Output of the spectrogram in the format: 
+                           [windows x frequencies x channels]. Number of
+                           windows (segments) is computed according to the
+                           following formula: 
+                           nsegments = fix((NX-NOVERLAP)/(length(WINDOW)-NOVERLAP))
+                           where NX is the total number of samples, NOVERLAP
+                           the number of overlapping samples for each segment
+                           and length(WINDOW) the number of samples in each
+                           segment. 
+                           Number of frequencies is computed according to the
+                           NFFT. nfrequencies is equal to (NFFT/2+1) if NFFT 
+                           is even, and (NFFT+1)/2 if NFFT is odd. NFFT is the
+                           maximum between 256 and the next power of 2 greater
+                           than the length(WINDOW).
+        - f                 Vectore with the computed frequencies
+    
+    """
+    
+    # Data informations
+    nsamples = data.shape[0]
+    nchannels = data.shape[1]
+
+    # Useful params for PSD extraction with the fast algorithm
+    psdshift = pshift * samplerate
+    winshift = wshift * samplerate
+
+    if (psdshift % winshift != 0) and (winshift % psdshift != 0):
+        warnings.warn('[proc_spectrogram] The fast PSD method cannot be applied with the current settings!', 
+                     category=UserWarning)
+        raise ValueError('[proc_spectrogram] The internal welch window shift must be a multiple of the overall feature window shift (or vice versa)!')
+
+    # Create arguments for spectrogram
+    spec_win = int(wlength * samplerate)
+    
+    # Careful here: The overlapping depends on whether the winshift or the
+    # psdshift is smaller. Some calculated internal windows will be redundant,
+    # but the speed is much faster anyway
+
+    if psdshift <= winshift:
+        spec_ovl = spec_win - int(psdshift)
+    else:
+        spec_ovl = spec_win - int(winshift)
+
+    # Calculate all the internal PSD windows
+    nsegments = int((nsamples - spec_ovl) / (spec_win - spec_ovl))  # From spectrogram's help page
+    nfft = max(256, int(2**(np.ceil(np.log2(spec_win)))))  # nextpow2 equivalent
+    if nfft % 2 == 0:
+        nfreqs = (nfft // 2) + 1
+    else:
+        nfreqs = (nfft + 1) // 2
+    
+    psd = np.zeros((nfreqs, nsegments, nchannels))
+    window = np.hamming(samplerate* wlength)  # Hamming window for the spectrogram
+    #NOverlap = wlength * samplerate  # Overlap for the spectrogram
+
+    for chId in range(nchannels):
+        #f, t, Sxx = signal.spectrogram(data[:, chId], fs=samplerate, window='hamming', 
+        #                              nperseg=spec_win, noverlap=spec_ovl, nfft=nfft)
+        #[~,f,~,psd(:,:,chId)] = spectrogram(data(:,chId), spec_win, spec_ovl, [], samplerate)
+       [psd[:, :, chId], f, t] = mlab.specgram(data[:, chId], NFFT = nfft, Fs = samplerate, window = window, noverlap = spec_ovl)
+        #psd[:, :, chId] = Sxx
+    
+    if mlength is not None:
+        # Setup moving average filter parameters
+        mavg_a = 1
+        if winshift >= psdshift:
+            # Case where internal windows are shifted according to psdshift
+            mavgsize = int(((mlength * samplerate) / psdshift) - 1)
+            mavg_b = (1 / mavgsize) * np.ones(mavgsize)
+            mavg_step = int(winshift / psdshift)
+        else:
+            # Case where internal windows are shifted according to winshift
+            mavgsize = int(((mlength * samplerate) / winshift) - (psdshift / winshift))
+            mavg_b = np.zeros(mavgsize)
+            step_size = int(psdshift / winshift)
+            mavg_b[0:mavgsize-1:step_size] = 1
+            mavg_b = mavg_b / np.sum(mavg_b)
+            mavg_step = 1
+        
+        # Find last non-zero element (equivalent to find(mavg_b~=0, 1, 'last'))
+        startindex = np.where(mavg_b != 0)[0][-1]
+
+        # Apply filter along axis 1 (equivalent to filter(mavg_b,mavg_a,psd,[],2))
+        features = signal.lfilter(mavg_b, mavg_a, psd, axis=1)
+        # Permute dimensions: [2 1 3] -> transpose from (nfreqs, nsegments, nchannels) to (nsegments, nfreqs, nchannels)
+        features = np.transpose(features, (1, 0, 2))
+
+        # Get rid of initial filter byproducts
+        features = features[startindex:, :, :]
+
+        # In case of psdshift, there will be redundant windows. Remove them
+        if mavg_step > 1:
+            features = features[::mavg_step, :, :]
+    else:
+        features = psd
+        # Permute dimensions: [2 1 3] -> transpose from (nfreqs, nsegments, nchannels) to (nsegments, nfreqs, nchannels)
+        features = np.transpose(features, (1, 0, 2))
+    
+    return features, f
+
+
+def compute_fisher_score(psd, events, freqs, runVector, classes=np.array([771, 773]), bool_dayVector=None, bool_protocolVector=None, SelFreqs=None):
+
+    if SelFreqs is None:    SelFreqs = freqs
+    if bool_dayVector is None:    bool_dayVector = np.ones(runVector.shape, dtype=bool)
+    if bool_protocolVector is None:    bool_protocolVector = np.ones(runVector.shape, dtype=bool)
+
+    nwindows, nfreqs, nchannels = psd.shape
+
+    pos = events.pos
+    dur = events.dur
+    typ = events.typ
+
+    # --- Creating vector labels ---
+
+    CFeedbackPOS = pos[typ == 781].reset_index(drop=True)
+    CFeedbackDUR = dur[typ == 781].reset_index(drop=True)
+
+    CueMask = (typ == 771) | (typ == 773) | (typ == 783)
+    CuePOS = pos[CueMask].reset_index(drop=True)
+    # CueDUR = dur[CueMask]
+    CueTYP = typ[CueMask].reset_index(drop=True)
+
+    # FixPOS = pos[typ == 786]
+    # FixDUR = dur[typ == 786]
+    # FixTYP = typ[typ == 786]
+
+    NumTrials = len(CFeedbackPOS)
+
+    # --- Consider interesting period from Cue appearance to end of continuous feedback ---
+
+    Ck = np.zeros(nwindows, dtype=float)
+    Tk = np.zeros(nwindows, dtype=float)
+    TrialStart = np.full(NumTrials, np.nan)
+    TrialStop = np.full(NumTrials, np.nan)
+
+    for trId in range(NumTrials):
+        cstart = int(CuePOS[trId])
+        cstop = int(CFeedbackPOS[trId] + CFeedbackDUR[trId] - 1)
+        Ck[cstart:cstop+1] = CueTYP[trId]
+        Tk[cstart:cstop+1] = trId + 1  # MATLAB is 1-based
+        
+        TrialStart[trId] = cstart
+        TrialStop[trId] = cstop
+
+    # --- Apply log to data (already done it) ---
+
+    # freqs, SelFreqs assumed as numpy arrays
+    idfreqs = np.nonzero(np.isin(freqs, SelFreqs))[0]
+    freqs = freqs[idfreqs]
+    u = psd[:, idfreqs, :]  # shape: (NumWins, NumFreqs, NumChans)
+
+    NumWins, NumFreqs, NumChans = u.shape
+
+    # --- Select wanted day ---
+    Runs = np.unique(runVector[bool_dayVector & bool_protocolVector])
+    NumRuns = len(Runs)
+    print(f"Found {NumRuns} runs")
+
+    # --- Computing Fisher score (for each run) ---
+    print("[proc] + Computing fisher score")
+    NumClasses = len(classes)
+
+    FisherScore = np.full((NumFreqs, NumChans, NumRuns), np.nan)
+    cva = np.full_like(FisherScore, np.nan)
+    skip_run = 0
+
+    for rId, run in enumerate(Runs):
+        rindex = (runVector == run)
+
+        cmu = np.full((NumFreqs, NumChans, 2), np.nan)
+        csigma = np.full((NumFreqs, NumChans, 2), np.nan)
+
+        for cId, cls in enumerate(classes):
+            cindex = rindex & (Ck == cls)
+            if not np.any(cindex):
+                print("Warning: No data for class in run ", run)
+                skip_run += 1
+                continue
+
+            cmu[:, :, cId] = np.nanmean(u[cindex, :, :], axis=0)
+            csigma[:, :, cId] = np.nanstd(u[cindex, :, :], axis=0)
+
+        if skip_run==NumClasses:
+            skip_run = 0
+            continue
+
+        FisherScore[:, :, rId] = np.abs(cmu[:, :, 1] - cmu[:, :, 0]) / np.sqrt(
+            csigma[:, :, 0]**2 + csigma[:, :, 1]**2
+        )
+
+        cindex = rindex & np.isin(Ck, classes)
+        u_sel = u[cindex, :, :]                           
+        u_flat = u_sel.reshape(u_sel.shape[0], -1, order='F')  # Flatten freq*chan
+        cva_result, _, _, _, _ = cva_tun_opt(u_flat, Ck[cindex])
+        # cva_result = cva_tun_opt(u[cindex, :, :], Ck[cindex])  # You must define this
+        cva[:, :, rId] = cva_result.reshape(NumFreqs, NumChans)
+
+    return FisherScore, cva
+
+
+def cva_tun_opt(pat, label):
+    """
+    Canonical Variate Analysis (CVA) transformation.
+
+    Inputs:
+        pat   : ndarray (n_samples x n_features)
+        label : ndarray (n_samples,)
+    
+    Outputs:
+        com   : Discriminability Power (%) of each feature
+        pwgr  : Within-group correlation matrix (features x components)
+        v     : Eigenvectors (features x components)
+        vp    : Eigenvalues (vector)
+        disc  : Transformed data (canonical variates)
+    """
+
+    # Ensure numpy arrays
+    pat = np.asarray(pat)
+    label = np.asarray(label)
+
+    # --- Relabel classes to 1..n_class
+    labels_old = np.unique(label)
+    label_new = np.zeros_like(label, dtype=int)
+    for j, lab in enumerate(labels_old):
+        label_new[label == lab] = j + 1
+    label = label_new
+
+    n_feature = pat.shape[1]
+    n_class = int(label.max())
+
+    # --- Within-class covariance matrix
+    cov_w = np.zeros((n_feature, n_feature, n_class))
+    for k in range(1, n_class + 1):
+        class_data = pat[label == k, :]
+        if class_data.shape[0] > 1:
+            cov_w[:, :, k - 1] = (class_data.shape[0] - 1) * np.cov(class_data, rowvar=False)
+    cov_total = np.sum(cov_w, axis=2)
+    mean_total = np.mean(pat, axis=0)
+
+    # --- Between-class covariance matrix
+    cov_b = np.zeros((n_feature, n_feature, n_class))
+    for k in range(1, n_class + 1):
+        class_data = pat[label == k, :]
+        cent_g = np.mean(class_data, axis=0) - mean_total
+        cov_b[:, :, k - 1] = class_data.shape[0] * np.outer(cent_g, cent_g)
+    b_total = np.sum(cov_b, axis=2)
+
+    # --- Solve generalized eigenproblem
+    c_inv = np.linalg.pinv(cov_total)
+    matrix = c_inv @ b_total
+    u, s, vt = np.linalg.svd(matrix)
+    v = u
+    vp = np.diag(s) if s.ndim == 2 else s
+
+    disc = pat @ v[:, :n_class - 1]
+
+    # --- Within-group correlation matrix
+    wg_cov = np.zeros((n_class - 1 + n_feature, n_class - 1 + n_feature, n_class))
+    for k in range(1, n_class + 1):
+        class_data = np.hstack([disc[label == k, :], pat[label == k, :]])
+        if class_data.shape[0] > 1:
+            wg_cov[:, :, k - 1] = (class_data.shape[0] - 1) * np.cov(class_data, rowvar=False)
+    pwg_cov = np.sum(wg_cov, axis=2)
+    pwgr = pwg_cov[n_class - 1:, :n_class - 1].copy()
+
+    # Normalize to get correlation coefficients
+    for i in range(pwgr.shape[0]):
+        for u_idx in range(pwgr.shape[1]):
+            denom = np.sqrt(pwg_cov[i + n_class - 1, i + n_class - 1] * pwg_cov[u_idx, u_idx])
+            pwgr[i, u_idx] = pwgr[i, u_idx] / denom if denom != 0 else 0
+
+    # --- Discriminability Power (%)
+    vp = vp[:n_class - 1]
+    vp_norm = vp / np.sum(vp)
+    com = 100.0 * ((pwgr ** 2) @ vp_norm) / np.sum((pwgr ** 2) @ vp_norm)
+
+    return com, pwgr, v, vp, disc
+
 
 
 # # ---------------------- ONLINE ----------------------

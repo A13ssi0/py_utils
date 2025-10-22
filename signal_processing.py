@@ -4,35 +4,39 @@ from py_utils.eeg_managment import proc_pos2win
 from matplotlib import mlab
 from scipy import signal
 import warnings
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, lfilter, lfilter_zi
 from tqdm import tqdm
 
 
-def get_trNorm_covariance_matrix(data, events, windowsLength, windowsShift, fc, substractWindowMean=True, dispProgress=True):
+def get_trNorm_covariance_matrix(data, events, windowsLength, windowsShift, fs, substractWindowMean=True, dispProgress=True):
     cov_events = events.copy()
     if isinstance(events, pd.DataFrame):
         # [samples] --> [windows]
-        cov_events['pos'] = proc_pos2win(cov_events['pos'], windowsShift*fc, 'backward', windowsLength*fc)
-        cov_events['dur'] = [ int(x) for x in cov_events['dur']/(windowsShift*fc)+1 ]
+        cov_events['pos'] = proc_pos2win(cov_events['pos'], windowsShift*fs, 'backward', windowsLength*fs)
+        cov_events['dur'] = [ int(x) for x in cov_events['dur']/(windowsShift*fs)+1 ]
 
     n_bandranges, nsamples, nchannels = data.shape
 
-    nwindows = int((nsamples-windowsLength*fc)/(windowsShift*fc))+1
+    nwindows = int((nsamples-windowsLength*fs)/(windowsShift*fs))+1
 
     Cov = np.empty((n_bandranges, nwindows, nchannels, nchannels))
 
     if dispProgress:
         print(' - Computing covariance matrices on the band ranges')
     for bId in range(n_bandranges):
-        ccov = get_sliding_covariance_trace_normalized(data[bId],  windowsLength*fc, windowsShift*fc, substractWindowMean, dispProgress=dispProgress)    # covariances matrix
+        ccov = get_sliding_covariance_trace_normalized(data[bId],  windowsLength*fs, windowsShift*fs, substractWindowMean, dispProgress=dispProgress)    # covariances matrix
         Cov[bId] = ccov
     return  [Cov, cov_events]
 
 
-def get_bandranges(signal, bandranges, fs, filter_order):
-    filt_signal = np.empty(tuple([len(bandranges)]) + signal.shape)
+def get_bandranges(signal, bandranges, fs, filter_order, filtType):
+    if len(bandranges) == 0:    return signal
+
+    if len(signal.shape) == 2:  filt_signal = np.empty(tuple([len(bandranges)]) + signal.shape)
+    elif len(signal.shape) == 3:  filt_signal = np.empty(signal.shape)
+
     for i,band in enumerate(bandranges):
-        [b,a] = butter(filter_order,np.array(band)/(fs/2),'bandpass')
+        [b,a] = butter(filter_order,np.array(band)/(fs/2), filtType)
         filt_signal[i, :, :] = lfilter(b,a,signal,axis=0)
     return filt_signal
 
@@ -67,6 +71,9 @@ def logbandpower(data, fs, slidingWindowLength=None):
     if slidingWindowLength is not None:
         b = np.ones(slidingWindowLength * fs) / (slidingWindowLength * fs)
         data_sqr = lfilter(b, 1, data_sqr, axis=0)
+    if (data_sqr == 0).any():
+        print("!!! WARNING: zero values found when computing logbandpower, adding 1e-12 to avoid log(0) !!!")
+        data_sqr += 1e-12
     return np.log(data_sqr)
 
 
@@ -373,10 +380,66 @@ def cva_tun_opt(pat, label):
 
 
 # # ---------------------- ONLINE ----------------------
+class RealTimeButterFilter:
+    def __init__(self, order, cutoff, fs, type):
+        self.order = order
+        self.cutoff = cutoff
+        self.fs = fs
+        self.b, self.a = butter(order, 2 * cutoff / fs, btype=type)
+        self.zi = None  # will be initialized on first call
 
+    def filter(self, data_chunk):
+        if self.zi is None:
+            # Initialize zi for each channel if data is 2D
+            if data_chunk.ndim == 1:
+                self.zi = lfilter_zi(self.b, self.a) * data_chunk[0]
+            else:
+                self.zi = np.array([
+                    lfilter_zi(self.b, self.a) * data_chunk[0, ch]
+                    for ch in range(data_chunk.shape[1])]).T
+
+        y, self.zi = lfilter(self.b, self.a, data_chunk, axis=0, zi=self.zi)
+        return y
+    
+
+class RealTimeLogBandPower:
+    def __init__(self, fs, sliding_window_length=None):
+        self.fs = fs
+        self.zi = None 
+        if sliding_window_length is not None:
+            n_points = sliding_window_length * fs
+            self.b = np.ones(n_points) / n_points
+            self.a = [1.0]
+        else:
+            self.b, self.a = None, None
+
+    def process(self, data_chunk):  
+        data_sqr = data_chunk ** 2
+
+        if self.zi is None and self.b is not None:
+            if data_chunk.ndim == 1:
+                self.zi = lfilter_zi(self.b, self.a) * data_chunk[0]
+            else:
+                self.zi = np.array([
+                    lfilter_zi(self.b, self.a) * data_chunk[0, ch]
+                    for ch in range(data_chunk.shape[1])]).T
+                
+        if self.b is not None:
+            data_sqr, self.zi = lfilter(self.b, self.a, data_sqr, axis=0, zi=self.zi)
+        if (data_sqr == 0).any():
+            print("!!! WARNING: zero values found when computing logbandpower, adding 1e-12 to avoid log(0) !!!")
+            data_sqr += 1e-12
+        return np.log(data_sqr)
+
+
+    
 def get_covariance_matrix_traceNorm_online(data):
-    data -= np.mean(data, axis=(0,2), keepdims=True)
-    cov = data.transpose((0,2,1)) @ data
+    if data.ndim == 2:  data = np.expand_dims(data, axis=0)
+    data -= np.mean(data, axis=(0, 1), keepdims=True)
+    cov = data.transpose((0, 2, 1)) @ data
+    # print('cov,',cov.shape)
+    # cov = covariances(data.transpose((0, 2, 1)), estimator='lwf')
     cov =  cov  / np.trace(cov, axis1=1, axis2=2).reshape(-1,1,1)
-    cov = np.expand_dims(cov, axis=1)
-    return cov
+    return np.expand_dims(cov, axis=1)
+
+

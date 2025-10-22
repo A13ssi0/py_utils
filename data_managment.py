@@ -4,7 +4,7 @@ import pandas as pd
 import joblib
 import os
 
-from scipy.io import loadmat
+from scipy.io import loadmat, savemat
 import mne
 
 from os.path import dirname
@@ -51,25 +51,26 @@ def get_immediate_subdirectories(path_dir):
     return sorted(subdirectories)
 
 
-def get_files(path):
-    root = tk.Tk()
+def get_files(path, ask_user=True):
 
-    filenames = ()
-    while True:
-        chosen_files = fd.askopenfilenames(initialdir=path)
-        if len(chosen_files)==0:
-            break
-        filenames += chosen_files
-        
-    if filenames[0,-4:]=='.mat':
-        signal, events_dataFrame, fs = load_mat_files(filenames)
-    elif filenames[0,-4:]=='.gdf':
-        signal, events_dataFrame = load_gdf_files(filenames)
-        fs = None
-    
-    directory_path = dirname(filenames[0])
-    root.destroy()
-    return [signal, events_dataFrame, fs, directory_path]
+    if ask_user:
+        root = tk.Tk()
+        filenames = ()
+        while True:
+            chosen_files = fd.askopenfilenames(initialdir=path)
+            if len(chosen_files)==0:
+                break
+            filenames += chosen_files
+        root.destroy() 
+    else:
+        filenames = path
+
+    if filenames[0][-4:]=='.mat':
+        signal, events_dataFrame, h, _ = load_mat_files(filenames)
+    elif filenames[0][-4:]=='.gdf':
+        signal, events_dataFrame, h = load_gdf_files(filenames)
+
+    return signal, events_dataFrame, h, list(filenames)
 
 
 def load_mat_files(filenames):
@@ -109,7 +110,7 @@ def load_mat_files(filenames):
         else:
             d['prt'].append([-1]*len(h['EVENT']['DUR']))
         last_day = file.split('/')[-2]
-        signal.append(data['s'][:,:-1])
+        signal.append(data['s'])
         eeg_dim_tot += data['s'].shape[0]
 
 
@@ -121,11 +122,9 @@ def load_mat_files(filenames):
     d['day'] = [ int(x) for x in np.concatenate(d['day']) ]
     d['prt'] = [ int(x) for x in np.concatenate(d['prt']) ]
     #d['ses_vector'] = [ int(x) for x in np.concatenate(d['ses_vector']) ]
-
-    fs = int(h['SampleRate'])
     
     events_dataFrame = pd.DataFrame(data=d)
-    return signal, events_dataFrame, fs, dates
+    return signal, events_dataFrame, h, dates
 
 
 def load_gdf_files(filenames):
@@ -164,14 +163,22 @@ def load_gdf_files(filenames):
     #d['ses_vector'] = [ int(x) for x in np.concatenate(d['ses_vector']) ]
     
     events_dataFrame = pd.DataFrame(data=d)
-    return signal, events_dataFrame
+    return signal, events_dataFrame, h
 
 
-def load(filename):
-    return joblib.load(filename)
+def load(filename, Type='.joblib'): 
+    if not filename.endswith('.joblib') and not filename.endswith('.mat'):
+        filename += Type
+    if filename.endswith('.mat'):       return loadmat(filename)
+    elif filename.endswith('.joblib'):  return joblib.load(filename)
+    else: raise ValueError('File type not recognized. Use .mat or .joblib')
 
-def save(filename, variable):
-    joblib.dump(variable, filename)
+def save(filename, variable, Type='.joblib'):
+    if not filename.endswith('.joblib') and not filename.endswith('.mat'):
+        filename += Type
+    if filename.endswith('.mat'):       savemat(filename, variable)
+    elif filename.endswith('.joblib'):  joblib.dump(variable, filename)
+    else: raise ValueError('File type not recognized. Use .mat or .joblib')
 
 
 def read_gdf(spath,verbosity='error',raw_events=False):

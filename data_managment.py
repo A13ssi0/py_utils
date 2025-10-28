@@ -51,7 +51,7 @@ def get_immediate_subdirectories(path_dir):
     return sorted(subdirectories)
 
 
-def get_files(path, ask_user=True):
+def get_files(path, ask_user=True, cutStartEnd=False):
 
     if ask_user:
         root = tk.Tk()
@@ -66,14 +66,14 @@ def get_files(path, ask_user=True):
         filenames = path
 
     if filenames[0][-4:]=='.mat':
-        signal, events_dataFrame, h, _ = load_mat_files(filenames)
+        signal, events_dataFrame, h, _ = load_mat_files(filenames, cutStartEnd=cutStartEnd)
     elif filenames[0][-4:]=='.gdf':
         signal, events_dataFrame, h = load_gdf_files(filenames)
 
     return signal, events_dataFrame, h, list(filenames)
 
 
-def load_mat_files(filenames):
+def load_mat_files(filenames, cutStartEnd=False):
     signal = []
     eeg_dim_tot = 0
     d = dict()
@@ -91,6 +91,14 @@ def load_mat_files(filenames):
         print(' - Loading file: ' + file)
         data = loadmat(file_name=file)
         h = fix_mat(data['h'])
+
+        if cutStartEnd:
+            start = h['EVENT']['POS'][0]
+            endS = h['EVENT']['POS'][-1] + h['EVENT']['DUR'][-1]
+            data['s'] = data['s'][start:endS]
+            h['EVENT']['POS'] -= start
+
+
         d['dur'].append(h['EVENT']['DUR'])
         d['typ'].append(h['EVENT']['TYP'])
         d['pos'].append(h['EVENT']['POS']+eeg_dim_tot-1)
@@ -168,6 +176,7 @@ def load_gdf_files(filenames):
 
 def load(filename):
     if not filename.endswith('.joblib'):    filename += '.joblib'
+    print(f"Loading model from {filename}...")
     return joblib.load(filename)
 
 def save(filename, variable):
@@ -176,6 +185,7 @@ def save(filename, variable):
 
 
 def read_gdf(spath,verbosity='error',raw_events=False):
+
     raw = read_raw_gdf(spath,verbose=verbosity)
 
     eeg = raw.get_data().T

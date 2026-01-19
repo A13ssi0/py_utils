@@ -4,7 +4,7 @@ from py_utils.eeg_managment import proc_pos2win
 from matplotlib import mlab
 from scipy import signal
 import warnings
-from scipy.signal import butter, lfilter, lfilter_zi
+from scipy.signal import butter, lfilter, lfilter_zi, tf2zpk
 from tqdm import tqdm
 
 
@@ -37,6 +37,11 @@ def get_bandranges(signal, bandranges, fs, filter_order, filtType):
 
     for i,band in enumerate(bandranges):
         [b,a] = butter(filter_order,np.array(band)/(fs/2), filtType)
+        # Check stability
+        z, p, k = tf2zpk(b, a)  # Get zeros, poles, and gain
+        stable = np.all(np.abs(p) < 1)
+        if not stable:
+            warnings.warn(f'[get_bandranges] Warning: The filter for band {band} is unstable!', category=UserWarning)
         filt_signal[i, :, :] = lfilter(b,a,signal,axis=0)
     return filt_signal
 
@@ -199,104 +204,172 @@ def proc_spectrogram(data, wlength, wshift, pshift, samplerate, mlength=None):
     return features, f
 
 
-def compute_fisher_score(psd, events, freqs, runVector, classes=np.array([771, 773]), bool_dayVector=None, bool_protocolVector=None, SelFreqs=None):
+def compute_fisher_score(psd, freqs, classes, runVector, runs_labels, isCFeedbackVector=None, validRuns=None, SelFreqs=None):
 
     if SelFreqs is None:    SelFreqs = freqs
-    if bool_dayVector is None:    bool_dayVector = np.ones(runVector.shape, dtype=bool)
-    if bool_protocolVector is None:    bool_protocolVector = np.ones(runVector.shape, dtype=bool)
-
-    nwindows, nfreqs, nchannels = psd.shape
-
-    pos = events.pos
-    dur = events.dur
-    typ = events.typ
-
-    # --- Creating vector labels ---
-
-    CFeedbackPOS = pos[typ == 781].reset_index(drop=True)
-    CFeedbackDUR = dur[typ == 781].reset_index(drop=True)
-
-    CueMask = (typ == 771) | (typ == 773) | (typ == 783)
-    CuePOS = pos[CueMask].reset_index(drop=True)
-    # CueDUR = dur[CueMask]
-    CueTYP = typ[CueMask].reset_index(drop=True)
-
-    # FixPOS = pos[typ == 786]
-    # FixDUR = dur[typ == 786]
-    # FixTYP = typ[typ == 786]
-
-    NumTrials = len(CFeedbackPOS)
-
-    # --- Consider interesting period from Cue appearance to end of continuous feedback ---
-
-    Ck = np.zeros(nwindows, dtype=float)
-    Tk = np.zeros(nwindows, dtype=float)
-    TrialStart = np.full(NumTrials, np.nan)
-    TrialStop = np.full(NumTrials, np.nan)
-
-    for trId in range(NumTrials):
-        cstart = int(CuePOS[trId])
-        cstop = int(CFeedbackPOS[trId] + CFeedbackDUR[trId] - 1)
-        Ck[cstart:cstop+1] = CueTYP[trId]
-        Tk[cstart:cstop+1] = trId + 1  # MATLAB is 1-based
-        
-        TrialStart[trId] = cstart
-        TrialStop[trId] = cstop
-
-    # --- Apply log to data (already done it) ---
-
-    # freqs, SelFreqs assumed as numpy arrays
     idfreqs = np.nonzero(np.isin(freqs, SelFreqs))[0]
     freqs = freqs[idfreqs]
-    u = psd[:, idfreqs, :]  # shape: (NumWins, NumFreqs, NumChans)
 
+    if isCFeedbackVector is None:   isCFeedbackVector = np.ones(runVector.shape, dtype=bool)
+    if validRuns is None:           validRuns = np.unique(runVector[isCFeedbackVector]).astype(int)
+    n_runs = validRuns.shape[0]
+
+
+    u = psd[:, idfreqs, :] 
     NumWins, NumFreqs, NumChans = u.shape
 
-    # --- Select wanted day ---
-    Runs = np.unique(runVector[bool_dayVector & bool_protocolVector])
-    NumRuns = len(Runs)
-    print(f"Found {NumRuns} runs")
-
     # --- Computing Fisher score (for each run) ---
-    print("[proc] + Computing fisher score")
-    NumClasses = len(classes)
+    # print("[proc] + Computing fisher score")
 
-    FisherScore = np.full((NumFreqs, NumChans, NumRuns), np.nan)
-    cva = np.full_like(FisherScore, np.nan)
-    skip_run = 0
+    FisherScore = np.full((NumFreqs, NumChans, n_runs), np.nan)
+    cva = FisherScore.copy()
 
-    for rId, run in enumerate(Runs):
-        rindex = (runVector == run)
+    for count_run, nR in tqdm (enumerate(validRuns), total=n_runs, bar_format='{l_bar}{bar:40}{r_bar}'):
+        # print('count: ' + str(count_run), '  nR: ' + str(nR), end="  ")
+        chosen_idx = (runVector==nR) & (isCFeedbackVector)
+        lbl = runs_labels[nR-1]
 
+        counter = 0
+        while len(lbl) == 1 and counter < 10:
+            lbl = lbl[0]
+            counter += 1
+
+        data = u[chosen_idx]
         cmu = np.full((NumFreqs, NumChans, 2), np.nan)
         csigma = np.full((NumFreqs, NumChans, 2), np.nan)
 
-        for cId, cls in enumerate(classes):
-            cindex = rindex & (Ck == cls)
-            if not np.any(cindex):
-                print("Warning: No data for class in run ", run)
-                skip_run += 1
-                continue
+        flag = np.full((len(classes)), False)
+        for cId, clss in enumerate(classes):
+            if np.sum(lbl==clss) > 0:
+                flag[cId] = True
+                # print(str(clss), end="  ")
+                cmu[:, :, cId] = np.nanmean(data[lbl==clss], axis=0)
+                csigma[:, :, cId] = np.nanstd(data[lbl==clss], axis=0)
 
-            cmu[:, :, cId] = np.nanmean(u[cindex, :, :], axis=0)
-            csigma[:, :, cId] = np.nanstd(u[cindex, :, :], axis=0)
-
-        if skip_run==NumClasses:
-            skip_run = 0
-            continue
-
-        FisherScore[:, :, rId] = np.abs(cmu[:, :, 1] - cmu[:, :, 0]) / np.sqrt(
+        if not all(flag):
+            raise ValueError(f'Missing classes in  run {nR}: classes not present {classes[flag]}')
+        
+        FisherScore[:, :, count_run] = np.abs(cmu[:, :, 1] - cmu[:, :, 0]) / np.sqrt(
             csigma[:, :, 0]**2 + csigma[:, :, 1]**2
         )
-
-        cindex = rindex & np.isin(Ck, classes)
-        u_sel = u[cindex, :, :]                           
-        u_flat = u_sel.reshape(u_sel.shape[0], -1, order='F')  # Flatten freq*chan
-        cva_result, _, _, _, _ = cva_tun_opt(u_flat, Ck[cindex])
-        # cva_result = cva_tun_opt(u[cindex, :, :], Ck[cindex])  # You must define this
-        cva[:, :, rId] = cva_result.reshape(NumFreqs, NumChans)
+                        
+        u_flat = data.reshape(data.shape[0], -1, order='F')  # Flatten freq*chan
+        cva_result, _, _, _, _ = cva_tun_opt(u_flat, lbl)
+        cva[:, :, count_run] = cva_result.reshape(NumFreqs, NumChans)
 
     return FisherScore, cva
+
+
+
+
+
+
+# def compute_fisher_score(psd, events, freqs, runVector, selectedRuns=None, classes=np.array([771, 773]), bool_dayVector=None, bool_protocolVector=None, SelFreqs=None):
+
+#     if SelFreqs is None:    SelFreqs = freqs
+#     if bool_dayVector is None:    bool_dayVector = np.ones(runVector.shape, dtype=bool)
+#     if bool_protocolVector is None:    bool_protocolVector = np.ones(runVector.shape, dtype=bool)
+
+#     if selectedRuns is not None:
+#         events = events[ np.isin(events.run, selectedRuns) ].reset_index(drop=True)
+
+#     nwindows, nfreqs, nchannels = psd.shape
+
+#     pos = events.pos
+#     dur = events.dur
+#     typ = events.typ
+
+#     # --- Creating vector labels ---
+
+#     CFeedbackPOS = pos[typ == 781].reset_index(drop=True)
+#     CFeedbackDUR = dur[typ == 781].reset_index(drop=True)
+
+#     CueMask = (typ == 771) | (typ == 773) | (typ == 783)
+#     CuePOS = pos[CueMask].reset_index(drop=True)
+#     # CueDUR = dur[CueMask]
+#     CueTYP = typ[CueMask].reset_index(drop=True)
+
+#     # FixPOS = pos[typ == 786]
+#     # FixDUR = dur[typ == 786]
+#     # FixTYP = typ[typ == 786]
+
+#     NumTrials = len(CFeedbackPOS)
+
+#     # --- Consider interesting period from Cue appearance to end of continuous feedback ---
+
+#     Ck = np.zeros(nwindows, dtype=float)
+#     Tk = np.zeros(nwindows, dtype=float)
+#     TrialStart = np.full(NumTrials, np.nan)
+#     TrialStop = np.full(NumTrials, np.nan)
+
+#     for trId in range(NumTrials):
+#         cstart = int(CuePOS[trId])
+#         cstop = int(CFeedbackPOS[trId] + CFeedbackDUR[trId] - 1)
+#         Ck[cstart:cstop+1] = CueTYP[trId]
+#         Tk[cstart:cstop+1] = trId
+        
+#         TrialStart[trId] = cstart
+#         TrialStop[trId] = cstop
+
+#     # --- Apply log to data (already done it) ---
+
+#     # freqs, SelFreqs assumed as numpy arrays
+#     idfreqs = np.nonzero(np.isin(freqs, SelFreqs))[0]
+#     freqs = freqs[idfreqs]
+#     u = psd[:, idfreqs, :]  # shape: (NumWins, NumFreqs, NumChans)
+
+#     NumWins, NumFreqs, NumChans = u.shape
+
+#     # --- Select wanted day ---
+#     if selectedRuns is None:
+#         Runs = np.unique(runVector[bool_dayVector & bool_protocolVector])
+#     else:
+#         Runs = selectedRuns
+
+#     NumRuns = len(Runs)
+#     print(f"Found {NumRuns} runs")
+
+#     # --- Computing Fisher score (for each run) ---
+#     print("[proc] + Computing fisher score")
+#     NumClasses = len(classes)
+
+#     FisherScore = np.full((NumFreqs, NumChans, NumRuns), np.nan)
+#     cva = np.full_like(FisherScore, np.nan)
+#     skip_run = 0
+
+#     for rId, run in enumerate(Runs):
+#         rindex = (runVector == run)
+
+#         cmu = np.full((NumFreqs, NumChans, 2), np.nan)
+#         csigma = np.full((NumFreqs, NumChans, 2), np.nan)
+
+#         for cId, cls in enumerate(classes):
+#             cindex = rindex & (Ck == cls)
+#             if not np.any(cindex):
+#                 print(f"Warning: No data for class {cls} in run {run}")
+#                 skip_run += 1
+#                 continue
+
+#             cmu[:, :, cId] = np.nanmean(u[cindex, :, :], axis=0)
+#             csigma[:, :, cId] = np.nanstd(u[cindex, :, :], axis=0)
+
+#         if skip_run==NumClasses:
+#             skip_run = 0
+#             continue
+
+#         FisherScore[:, :, rId] = np.abs(cmu[:, :, 1] - cmu[:, :, 0]) / np.sqrt(
+#             csigma[:, :, 0]**2 + csigma[:, :, 1]**2
+#         )
+
+#         cindex = rindex & np.isin(Ck, classes)
+#         u_sel = u[cindex, :, :]                           
+#         u_flat = u_sel.reshape(u_sel.shape[0], -1, order='F')  # Flatten freq*chan
+#         cva_result, _, _, _, _ = cva_tun_opt(u_flat, Ck[cindex])
+#         # cva_result = cva_tun_opt(u[cindex, :, :], Ck[cindex])  # You must define this
+#         cva[:, :, rId] = cva_result.reshape(NumFreqs, NumChans)
+
+#     return FisherScore, cva
+
 
 
 def cva_tun_opt(pat, label):

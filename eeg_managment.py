@@ -3,7 +3,9 @@ from sklearn.model_selection import train_test_split
 
 
 def get_channelsMask(wantedChannels, actualChannels):
-    return [item in wantedChannels for item in actualChannels]
+    wanted = [w.strip() for w in wantedChannels]
+    actual = [a.strip() for a in actualChannels]
+    return [item in wanted for item in actual]
 
 
 def select_channels(signal, wantedChannels, actualChannels=[]):

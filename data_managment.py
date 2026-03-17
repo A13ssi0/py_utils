@@ -75,7 +75,7 @@ def get_files(path, ask_user=True, cutStartEnd=False):
     return signal, events_dataFrame, h, list(filenames)
 
 
-def load_mat_files(filenames, cutStartEnd=False):
+def load_mat_files(filenames, cutStartEnd=False, printOutput=True):
     signal = []
     eeg_dim_tot = 0
     d = dict()
@@ -87,10 +87,13 @@ def load_mat_files(filenames, cutStartEnd=False):
     d['prt']=[]
     dates = []
 
+    sepChar = '/' if '/' in filenames[0] else '\\'
+
     n_ses = 0
     last_day = ''
     for n,file in enumerate(filenames):
-        print(' - Loading file: ' + file)
+        if printOutput:
+            print(' - Loading file: ' + file)
         data = loadmat(file_name=file)
         h = fix_mat(data['h'])
 
@@ -105,9 +108,9 @@ def load_mat_files(filenames, cutStartEnd=False):
         d['typ'].append(h['EVENT']['TYP'])
         d['pos'].append(h['EVENT']['POS']+eeg_dim_tot-1)
         d['run'].append([n]*len(h['EVENT']['DUR']))
-        if file.split('/')[-2] != last_day:     
+        if file.split(sepChar)[-2] != last_day:     
             n_ses += 1
-            t_day = file.split('/')[-2]
+            t_day = file.split(sepChar)[-2]
             dates.append(t_day[6:8]+'/'+t_day[4:6]+'/'+t_day[:4])
         d['day'].append([n_ses]*len(h['EVENT']['DUR']))
             
@@ -119,7 +122,7 @@ def load_mat_files(filenames, cutStartEnd=False):
             d['prt'].append([2]*len(h['EVENT']['DUR']))
         else:
             d['prt'].append([-1]*len(h['EVENT']['DUR']))
-        last_day = file.split('/')[-2]
+        last_day = file.split(sepChar)[-2]
         signal.append(data['s'])
         eeg_dim_tot += data['s'].shape[0]
 
@@ -137,7 +140,7 @@ def load_mat_files(filenames, cutStartEnd=False):
     return signal, events_dataFrame, h, dates
 
 
-def load_gdf_files(filenames):
+def load_gdf_files(filenames, printOutput=True):
     signal = []
     eeg_dim_tot = 0
     d = dict()
@@ -149,7 +152,8 @@ def load_gdf_files(filenames):
     n_ses = 0
     last_day = ''
     for n,file in enumerate(filenames):
-        print(' - Loading file: ' + file)
+        if printOutput:
+            print(' - Loading file: ' + file)
         eeg,h = read_gdf(file)
         d['typ'].append(h['EVENT']['TYP'])
         d['dur'].append(h['EVENT']['DUR'])

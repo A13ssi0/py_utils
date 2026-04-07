@@ -14,6 +14,8 @@ from tkinter import filedialog as fd
 from mne.io import read_raw_gdf
 from mne import events_from_annotations
 
+import mne
+from pathlib import Path
 
 def saveto_npy(arr, pth):
     extension = 'npy'
@@ -172,6 +174,84 @@ def load_gdf_files(filenames):
     
     events_dataFrame = pd.DataFrame(data=d)
     return signal, events_dataFrame, h
+
+
+def load_fif_files(eeg_folder, event_folder, subject_id, session_type=None):
+    """
+    Load FIF EEG files and corresponding CSV event files.
+
+    Returns:
+        signal: np.ndarray (samples x channels)
+        events_df: pd.DataFrame (pos, typ, dur, run, session)
+        info: dict (metadata like fs, channels)
+    """
+
+    eeg_folder = Path(eeg_folder)
+    event_folder = Path(event_folder)
+
+    all_signal = []
+    d = {
+        'pos': [],
+        'typ': [],
+        'dur': [],
+        'run': [],
+        'session': []
+    }
+
+    sample_offset = 0
+    sfreq = None
+    ch_names = None
+
+    search_pattern = f"sub-{subject_id:02d}_run-*_events.csv"
+
+    for run_idx, csv_file in enumerate(sorted(event_folder.glob(search_pattern))):
+        df_ev = pd.read_csv(csv_file)
+
+        # Filter session if needed
+        if session_type is not None:
+            if df_ev['session'].iloc[0] != session_type:
+                continue
+
+        run_id = csv_file.stem.split('_')[1]
+
+        fif_file = eeg_folder / f"sub-{subject_id:02d}_{run_id}_raw.fif"
+        print(f" - Loading {fif_file}")
+
+        raw = mne.io.read_raw_fif(fif_file, preload=True, verbose=0)
+        raw.pick('eeg')
+
+        if sfreq is None:
+            sfreq = raw.info['sfreq']
+            ch_names = raw.ch_names
+
+        data = raw.get_data().T  # shape: samples x channels
+        all_signal.append(data)
+
+        # Build event structure
+        for _, row in df_ev.iterrows():
+            start = int(np.round(row['start'] * sfreq))
+            end = int(np.round(row['end'] * sfreq))
+            duration = end - start
+
+            d['pos'].append(start + sample_offset)
+            d['dur'].append(duration)
+            d['typ'].append(row['label'])  # keep string or map later
+            d['run'].append(run_idx)
+            d['session'].append(row['session'])
+
+        sample_offset += data.shape[0]
+
+    # Concatenate signal
+    signal = np.concatenate(all_signal, axis=0)
+
+    events_df = pd.DataFrame(d)
+
+    info = {
+        'sfreq': sfreq,
+        'channels': ch_names
+    }
+
+    return signal, events_df, info
 
 
 def load(filename, Type='.joblib'): 

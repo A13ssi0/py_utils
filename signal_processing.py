@@ -29,6 +29,34 @@ def get_covariance_matrix_normalized(data, events, windowsLength, windowsShift, 
     return  [Cov, cov_events]
 
 
+def get_data_windowed(data, events, windowsLength, windowsShift, fs):
+
+    hasBand = len(data.shape) == 3
+    if not hasBand:
+        data = np.expand_dims(data, axis=0)
+
+    data_events = events.copy()
+    if isinstance(events, pd.DataFrame):
+        # [samples] --> [windows]
+        data_events['pos'] = proc_pos2win(data_events['pos'], windowsShift*fs, 'backward', windowsLength*fs)
+        data_events['dur'] = [ int(x) for x in data_events['dur']/(windowsShift*fs)+1 ]
+
+    n_bandranges, nsamples, nchannels = data.shape
+
+    nwindows = int((nsamples-windowsLength*fs)/(windowsShift*fs))+1
+
+    wind_data = np.empty((n_bandranges, nwindows, int(windowsLength*fs), nchannels))
+
+    for bId in range(n_bandranges):
+        for wId in range(nwindows):
+            cstart = int(wId * windowsShift * fs)
+            cstop = int(cstart + windowsLength * fs)
+            wind_data[bId, wId] = data[bId, cstart:cstop, :]
+
+    if not hasBand:
+        wind_data = np.squeeze(wind_data, axis=0)
+    return  wind_data, data_events
+
 
 def get_trNorm_covariance_matrix(data, events, windowsLength, windowsShift, fs, substractWindowMean=True, dispProgress=True):
     cov_events = events.copy()
@@ -77,7 +105,7 @@ def get_sliding_covariance_normalized(data, wlenght, wshift, normalizationMethod
     nwins = len(wstart)
     
     c = np.empty((nwins, nchannels, nchannels))
-    for wId in tqdm (range (nwins), bar_format='{l_bar}{bar:40}{r_bar}', disable=not dispProgress):        
+    for wId in tqdm (range (nwins), bar_format='{l_bar}{bar:40}{r_bar}', disable=not dispProgress, leave=False):        
         cstart = int(wstart[wId])
         cstop = int(wstop[wId])
         t_data = data[cstart:cstop, :]

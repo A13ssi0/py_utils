@@ -45,13 +45,13 @@ def get_data_windowed(data, events, windowsLength, windowsShift, fs):
 
     nwindows = int((nsamples-windowsLength*fs)/(windowsShift*fs))+1
 
-    wind_data = np.empty((n_bandranges, nwindows, int(windowsLength*fs), nchannels))
+    wind_data = np.empty((n_bandranges, nwindows, int(windowsLength*fs), nchannels), dtype=np.float32)
 
     for bId in range(n_bandranges):
         for wId in range(nwindows):
             cstart = int(wId * windowsShift * fs)
             cstop = int(cstart + windowsLength * fs)
-            wind_data[bId, wId] = data[bId, cstart:cstop, :]
+            wind_data[bId, wId] = data[bId, cstart:cstop, :].astype(np.float32)
 
     if not hasBand:
         wind_data = np.squeeze(wind_data, axis=0)

@@ -1,12 +1,16 @@
+from rich import box
 from rich.console import Console
 from rich.table import Table
-from rich import box
-import numpy as np
-import matplotlib.pyplot as plt
+
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
-import matplotlib.lines as mlines
+import matplotlib.pyplot as plt
+import numpy as np
 from sklearn.linear_model import HuberRegressor
 from sklearn.preprocessing import StandardScaler
+
+
 
 def plot_confusion_matrix(matrix, labels=None):
     console = Console()
@@ -308,3 +312,241 @@ def plot_array_runs_grid(
 
     plt.show()
     return fig
+
+def get_x(scatter_data):
+    return np.arange(len(scatter_data))
+
+def plot_similarity_matrices(
+    matrix_angleCos,
+    matrix_distance,
+    n_classes=None,
+    day_start_idx=[],
+    stop_idx=[],
+    rec_idx=[],
+    trial_accuracy=None,
+    accuracy=None,
+    d_max=None,
+    rejection=None,
+    cmap_name='PuBu',
+    cell_size=2.2,  
+    saveFigure=False,
+    savingPath='.',
+    filename='figure.svg'
+):
+
+    # ---------------- DATA ----------------
+    angle_data = np.array(matrix_angleCos)
+    dist_data  = np.array(matrix_distance)
+
+    shape = angle_data.shape
+
+    if len(shape) == 4:
+        n_bands, n_run, _, n_classes_ = shape
+    elif len(shape) == 3:
+        n_bands, n_run, _ = shape
+        n_classes_ = 1
+    else:
+        raise ValueError("Unsupported matrix shape")
+
+    if n_classes is None:
+        n_classes = n_classes_
+
+    # ---------------- NORMALIZATION ----------------
+    angle_min, angle_max = 0,1
+    dist_min = 0
+    # dist_min, dist_max   = np.min(dist_data), np.max(dist_data)
+    q1 = np.nanpercentile(dist_data, 25)
+    q3 = np.nanpercentile(dist_data, 75)
+    iqr = q3 - q1
+
+    dist_max = q3 + 2 * iqr
+
+    cmap = plt.get_cmap(cmap_name)
+
+    # ---------------- LAYOUT ----------------
+    show_top = accuracy is not None or rejection is not None or trial_accuracy is not None
+    top_rows = 1 if show_top else 0
+
+    n_rows = top_rows + 2
+    n_cols = n_classes
+
+    fig_width  = n_cols * cell_size
+    fig_height = (1.5 * cell_size) + (0.5 * top_rows * cell_size)
+
+    fig = plt.figure(figsize=(fig_width, fig_height))
+
+    gs = gridspec.GridSpec(
+        n_rows,
+        n_cols + 1,
+        height_ratios=([0.25] if show_top else []) + [1, 1],
+        width_ratios=[1]*n_cols + [0.05],
+        hspace=0.05,
+        wspace=0.2
+    )
+
+    axes = np.empty((n_rows, n_cols), dtype=object)
+
+    for i in range(n_rows):
+        for j in range(n_cols):
+            axes[i, j] = fig.add_subplot(gs[i, j])
+
+    base_runs = np.arange(n_run)
+    color_bg = "gainsboro"
+
+    # ---------------- TOP ROW ----------------
+    if show_top:
+        for c in range(n_classes):
+            ax = axes[0, c]
+
+            if trial_accuracy is not None:
+                mask = ~np.isnan(trial_accuracy[:,c])
+                ax.bar(base_runs[mask], trial_accuracy[mask,c],
+                       color='b', alpha=0.4,    
+                       label='Trial Acc.',
+                       edgecolor='darkblue')
+
+            if rejection is not None:
+                mask = ~np.isnan(rejection[:,c])
+                ax.scatter(base_runs[mask], rejection[mask,c],
+                           s=12, color='r',
+                           label='Rejection',
+                           edgecolors='darkred')
+                
+            if accuracy is not None:
+                mask = ~np.isnan(accuracy[:,c])
+                ax.scatter(base_runs[mask], accuracy[mask,c],
+                           s=12, color='g',
+                           label='Accuracy',
+                           edgecolors='darkgreen')
+                
+
+
+            ax.set_xlim(-0.5, n_run - 0.5)
+            ax.set_ylim(0, 1)
+
+            ax.set_xticks([])
+            ax.set_yticks(np.linspace(0, 1, 5))
+
+
+
+            ax.set_title(f'Class {c}', fontsize=11, pad=8)
+
+            if c == 0:
+                ax.set_ylabel("Performance")
+
+
+            # vertical markers
+            for k in day_start_idx:
+                ax.axvline(k - 0.5, color='k', lw=0.5, alpha=0.5, zorder=-10)
+
+            for k in stop_idx:
+                ax.axvline(k - 0.5, color='r', lw=1, zorder=-10)
+
+            for k in rec_idx:
+                ax.axvline(k - 0.5, color='orange', lw=1, zorder=-10)
+
+            # horizontal grid
+            for y in ax.get_yticks():
+                ax.axhline(y, color=color_bg, lw=1, zorder=-10)
+
+            if c > 0:
+                ax.set_yticks([])
+
+            ax.legend(loc='upper center',
+                        bbox_to_anchor=(0.5, 0.1),
+                        ncol=3 if trial_accuracy is not None else 2,
+                        frameon=False)
+
+    # ---------------- MATRICES ----------------
+    row_offset = top_rows
+
+    for c in range(n_classes):
+
+        ax_a = axes[row_offset, c]
+        ax_d = axes[row_offset + 1, c]
+
+        # if n_classes > 1:
+        angle_mat = angle_data[0, :, :, c] if len(shape) == 4 else angle_data
+        dist_mat  = dist_data[0, :, :, c]  if len(shape) == 4 else dist_data
+        # else:
+        #     angle_mat = angle_data[0] if len(shape) == 3 else angle_data
+        #     dist_mat  = dist_data[0]  if len(shape) == 3 else dist_data
+
+        im_a = ax_a.imshow(
+            angle_mat,
+            cmap=cmap.reversed(),
+            vmin=angle_min,
+            vmax=angle_max,
+            aspect='auto',
+            extent=[-0.5, n_run - 0.5, n_run - 0.5, -0.5]
+        )
+
+        im_d = ax_d.imshow(
+            dist_mat,
+            cmap=cmap,
+            vmin=dist_min,
+            vmax=dist_max,
+            aspect='auto',
+            extent=[-0.5, n_run - 0.5, n_run - 0.5, -0.5]
+        )
+
+        # ---- FORCE SQUARE AXES ----
+        ax_a.set_box_aspect(1)
+        ax_d.set_box_aspect(1)
+
+        for ax in (ax_a, ax_d):
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+            # markers
+            for k in day_start_idx:
+                ax.axvline(k - 0.5, color='k', lw=0.5, alpha=0.5)
+                ax.axhline(k - 0.5, color='k', lw=0.5, alpha=0.5)
+
+            for k in stop_idx:
+                ax.axvline(k - 0.5, color='r', lw=0.5)
+                ax.axhline(k - 0.5, color='r', lw=0.5)
+
+            for k in rec_idx:
+                ax.axvline(k - 0.5, color='orange', lw=0.5)
+                ax.axhline(k - 0.5, color='orange', lw=0.5)
+
+        if c == 0:
+            ax_a.set_ylabel("Angle")
+            ax_d.set_ylabel("Distance")
+
+        # ---- SHARE X WITH TOP ----
+        if show_top:
+            ax_a.sharex(axes[0, c])
+            ax_d.sharex(axes[0, c])
+
+        for ax in axes.flatten():
+            ax.margins(0)
+
+    # ---------------- COLORBARS ----------------
+    cax_a = fig.add_subplot(gs[row_offset, -1])
+    cax_d = fig.add_subplot(gs[row_offset + 1, -1])
+
+    fig.colorbar(cm.ScalarMappable(
+        norm=mcolors.Normalize(angle_min, angle_max),
+        cmap=cmap.reversed()), cax=cax_a)
+
+    fig.colorbar(cm.ScalarMappable(
+        norm=mcolors.Normalize(dist_min, dist_max),
+        cmap=cmap), cax=cax_d)
+
+    plt.subplots_adjust(
+        top=0.95,
+        bottom=0.08,
+        left=0.15,
+        right=0.9,
+        hspace=0.5
+    )
+    # plt.tight_layout()
+    plt.show()
+
+    # ---------------- SAVE ----------------
+    if saveFigure:
+        path = f"{savingPath}/{filename}"
+        fig.savefig(path, bbox_inches='tight', dpi=300)
+        print(f"Saved to {path}")

@@ -92,7 +92,10 @@ def get_bandranges(signal, bandranges, fs, filter_order, filtType):
         stable = np.all(np.abs(p) < 1)
         if not stable:
             warnings.warn(f'[get_bandranges] Warning: The filter for band {band} is unstable!', category=UserWarning)
-        filt_signal[i, :, :] = lfilter(b,a,signal,axis=0)
+        # 3D input is [bands x samples x channels]: always filter along the samples axis
+        if len(signal.shape) == 2:      filt_signal[i, :, :] = lfilter(b,a,signal,axis=0)
+        elif len(bandranges) == 1:      filt_signal = lfilter(b,a,signal,axis=1)    # one range applied to every band
+        else:                           filt_signal[i, :, :] = lfilter(b,a,signal[i],axis=0)
     return filt_signal
 
 

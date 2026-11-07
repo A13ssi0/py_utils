@@ -20,13 +20,13 @@ from pathlib import Path
 def saveto_npy(arr, pth):
     extension = 'npy'
     with open(pth, 'wb+') as fh:
-        np.np_save(fh, arr, allow_pickle=False)
+        np.save(fh, arr, allow_pickle=False)
         fh.flush()
         os.fsync(fh.fileno())
 
 
 def load_npy(pth):
-    return np.np_load(pth)
+    return np.load(pth)
 
 
 def get_all_online_offline_files(path):
@@ -37,7 +37,7 @@ def get_all_online_offline_files(path):
         filenames = [path + '/' + dir + '/' + k for k in filenames if '.gdf' in k and ('online' in k or 'offline' in k)]
         if len(filenames)>0:
             filepaths += filenames
-    signal, events_dataFrame = load_gdf_files(filepaths)
+    signal, events_dataFrame, _ = load_gdf_files(filepaths)
     return signal, events_dataFrame
 
 

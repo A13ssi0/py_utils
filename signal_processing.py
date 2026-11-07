@@ -121,7 +121,7 @@ def get_sliding_covariance_normalized(data, wlenght, wshift, normalizationMethod
 
 def get_covariance_matrix_traceNorm(data, substractWindowMean=True):
     if substractWindowMean:
-        data -= np.mean(data, axis=0)
+        data = data - np.mean(data, axis=0)   # not in place: data is a view of the full signal and windows overlap
     t_cov = data.T @ data
     cov =  t_cov  / np.trace(t_cov)
     return cov
@@ -303,7 +303,7 @@ def compute_fisher_score(psd, freqs, classes, runVector, runs_labels, isCFeedbac
                 csigma[:, :, cId] = np.nanstd(data[lbl==clss], axis=0)
 
         if not all(flag):
-            raise ValueError(f'Missing classes in  run {nR}: classes not present {classes[flag]}')
+            raise ValueError(f'Missing classes in  run {nR}: classes not present {np.asarray(classes)[~flag]}')
         
         FisherScore[:, :, count_run] = np.abs(cmu[:, :, 1] - cmu[:, :, 0]) / np.sqrt(
             csigma[:, :, 0]**2 + csigma[:, :, 1]**2
@@ -536,7 +536,7 @@ class RealTimeLogBandPower:
         self.fs = fs
         self.zi = None 
         if sliding_window_length is not None:
-            n_points = sliding_window_length * fs
+            n_points = int(round(sliding_window_length * fs))
             self.b = np.ones(n_points) / n_points
             self.a = [1.0]
         else:
@@ -546,12 +546,13 @@ class RealTimeLogBandPower:
         data_sqr = data_chunk ** 2
 
         if self.zi is None and self.b is not None:
-            if data_chunk.ndim == 1:
-                self.zi = lfilter_zi(self.b, self.a) * data_chunk[0]
+            # initial state must match the filtered signal (the squared data), not the raw chunk
+            if data_sqr.ndim == 1:
+                self.zi = lfilter_zi(self.b, self.a) * data_sqr[0]
             else:
                 self.zi = np.array([
-                    lfilter_zi(self.b, self.a) * data_chunk[0, ch]
-                    for ch in range(data_chunk.shape[1])]).T
+                    lfilter_zi(self.b, self.a) * data_sqr[0, ch]
+                    for ch in range(data_sqr.shape[1])]).T
                 
         if self.b is not None:
             data_sqr, self.zi = lfilter(self.b, self.a, data_sqr, axis=0, zi=self.zi)

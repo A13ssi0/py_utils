@@ -20,13 +20,13 @@ def plot_confusion_matrix(matrix, labels=None):
     # Add column headers
     table.add_column(" ", style="bold bright_cyan")
     for i in range(n):
-        label = labels[i] if labels else str(i)
+        label = labels[i] if labels is not None else str(i)
         table.add_column(f"P_{label}", justify="center")
 
     # Add matrix rows
     max_val = matrix.max()
     for i in range(n):
-        label = labels[i] if labels else str(i)
+        label = labels[i] if labels is not None else str(i)
         row = [f"[bright_yellow]T_{label}[/]"]
         for j in range(n):
             val = matrix[i][j]
@@ -139,7 +139,8 @@ def plot_array_runs_grid(
 
             ax.set_ylim(0, 1)
             ax.tick_params(axis='x', labelbottom=False)
-            ax.set_xticks(day_start_idx)
+            if day_start_idx is not None:
+                ax.set_xticks(day_start_idx)
 
             ax.tick_params(axis='both',
                            direction='in', length=5)
@@ -206,7 +207,8 @@ def plot_array_runs_grid(
                         idxBand == n_bands-1) else None
                     )
 
-            ax.set_xticks(day_start_idx)
+            if day_start_idx is not None:
+                ax.set_xticks(day_start_idx)
                 # ax.set_xticklabels(day_labels,
                 #                    rotation=60, ha='right')
 
